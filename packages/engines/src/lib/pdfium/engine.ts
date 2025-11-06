@@ -3148,7 +3148,13 @@ export class PdfiumEngine<T = Blob> implements PdfEngine<T> {
         return false;
       }
     }
-    if (!this.pdfiumModule.EPDFAnnot_UpdateAppearanceToRect(annotationPtr, PdfStampFit.Cover)) {
+    // DEBUG: Test rotation matrix fix with Cover mode
+    const rotation = this.pdfiumModule.EPDF_GetPageRotationByIndex(docPtr, page.index);
+    const fitMode = PdfStampFit.Cover; // Use Cover for all to test rotation matrix
+    
+    console.log(`[STAMP DEBUG] Using fit mode: ${fitMode} for page rotation: ${rotation}`);
+    
+    if (!this.pdfiumModule.EPDFAnnot_UpdateAppearanceToRect(annotationPtr, fitMode)) {
       return false;
     }
 
@@ -3222,13 +3228,38 @@ export class PdfiumEngine<T = Blob> implements PdfEngine<T> {
       return false;
     }
 
+    // Handle page rotation for proper image orientation
+    const rotation = page.rotation & 3;
+    
+    // For debugging - log the page rotation
+    console.log('Page rotation:', rotation, 'degrees:', rotation * 90);
+    
+    // Create matrix based on page rotation
     const matrixPtr = this.memoryManager.malloc(6 * 4);
-    this.pdfiumModule.pdfium.setValue(matrixPtr, imageData.width, 'float');
-    this.pdfiumModule.pdfium.setValue(matrixPtr + 4, 0, 'float');
-    this.pdfiumModule.pdfium.setValue(matrixPtr + 8, 0, 'float');
-    this.pdfiumModule.pdfium.setValue(matrixPtr + 12, imageData.height, 'float');
-    this.pdfiumModule.pdfium.setValue(matrixPtr + 16, 0, 'float');
-    this.pdfiumModule.pdfium.setValue(matrixPtr + 20, 0, 'float');
+    
+    if (rotation === 3) {
+      // For CAD PDF: rotation + scaling matrix
+      // 90° clockwise rotation matrix combined with scaling
+      this.pdfiumModule.pdfium.setValue(matrixPtr, 0, 'float');                    // a: cos(90°)
+      this.pdfiumModule.pdfium.setValue(matrixPtr + 4, imageData.height, 'float'); // b: sin(90°) * height
+      this.pdfiumModule.pdfium.setValue(matrixPtr + 8, -imageData.width, 'float'); // c: -sin(90°) * width  
+      this.pdfiumModule.pdfium.setValue(matrixPtr + 12, 0, 'float');               // d: cos(90°)
+      this.pdfiumModule.pdfium.setValue(matrixPtr + 16, 0, 'float');               // e
+      this.pdfiumModule.pdfium.setValue(matrixPtr + 20, 0, 'float');               // f
+      
+      console.log(`[MATRIX DEBUG] CAD PDF rotation matrix: 0, ${imageData.height}, ${-imageData.width}, 0`);
+    } else {
+      // Normal PDF: simple scaling matrix
+      this.pdfiumModule.pdfium.setValue(matrixPtr, imageData.width, 'float');  // a
+      this.pdfiumModule.pdfium.setValue(matrixPtr + 4, 0, 'float');            // b
+      this.pdfiumModule.pdfium.setValue(matrixPtr + 8, 0, 'float');            // c  
+      this.pdfiumModule.pdfium.setValue(matrixPtr + 12, imageData.height, 'float'); // d
+      this.pdfiumModule.pdfium.setValue(matrixPtr + 16, 0, 'float');           // e
+      this.pdfiumModule.pdfium.setValue(matrixPtr + 20, 0, 'float');           // f
+      
+      console.log(`[MATRIX DEBUG] Normal PDF scaling matrix: ${imageData.width}x${imageData.height}`);
+    }
+    
     if (!this.pdfiumModule.FPDFPageObj_SetMatrix(imageObjectPtr, matrixPtr)) {
       this.memoryManager.free(matrixPtr);
       this.pdfiumModule.FPDFBitmap_Destroy(bitmapPtr);
@@ -3238,11 +3269,16 @@ export class PdfiumEngine<T = Blob> implements PdfEngine<T> {
     }
     this.memoryManager.free(matrixPtr);
 
+    // Standard positioning for all cases
     const pagePos = this.convertDevicePointToPagePoint(page, {
       x: rect.origin.x,
-      y: rect.origin.y + imageData.height, // shift down by the image height
+      y: rect.origin.y + rect.size.height,
     });
+    
+    // Apply translation
     this.pdfiumModule.FPDFPageObj_Transform(imageObjectPtr, 1, 0, 0, 1, pagePos.x, pagePos.y);
+    
+    console.log(`[POSITIONING] Final: pageX=${pagePos.x}, pageY=${pagePos.y}, rotation=${rotation}`);
 
     if (!this.pdfiumModule.FPDFAnnot_AppendObject(annotationPtr, imageObjectPtr)) {
       this.pdfiumModule.FPDFBitmap_Destroy(bitmapPtr);
