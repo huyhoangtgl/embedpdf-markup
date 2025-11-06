@@ -3148,11 +3148,11 @@ export class PdfiumEngine<T = Blob> implements PdfEngine<T> {
         return false;
       }
     }
-    // DEBUG: Test rotation matrix fix with Cover mode
-    const rotation = this.pdfiumModule.EPDF_GetPageRotationByIndex(docPtr, page.index);
-    const fitMode = PdfStampFit.Cover; // Use Cover for all to test rotation matrix
+    // Use different fit mode for rotated pages to prevent rotation artifacts
+    const fitMode = page.rotation === 3 ? PdfStampFit.Stretch : PdfStampFit.Cover;
+    const pageRotation = this.pdfiumModule.EPDF_GetPageRotationByIndex(docPtr, page.index);
     
-    console.log(`[STAMP DEBUG] Using fit mode: ${fitMode} for page rotation: ${rotation}`);
+    console.log(`[STAMP DEBUG] Using fit mode: ${fitMode} for page rotation: ${pageRotation}`);
     
     if (!this.pdfiumModule.EPDFAnnot_UpdateAppearanceToRect(annotationPtr, fitMode)) {
       return false;
@@ -3181,6 +3181,15 @@ export class PdfiumEngine<T = Blob> implements PdfEngine<T> {
     rect: Rect,
     imageData: ImageData,
   ) {
+    // Lấy rotation của page
+    const rotation = this.pdfiumModule.FPDFPage_GetRotation(pagePtr);
+    console.log('Page rotation:', rotation); // Debug
+
+    // Rotate imageData based on page rotation to compensate
+    if (rotation !== 0) {
+      imageData = this.rotateImageData(imageData, rotation);
+    }
+
     const bytesPerPixel = 4;
     const pixelCount = imageData.width * imageData.height;
 
@@ -3228,38 +3237,13 @@ export class PdfiumEngine<T = Blob> implements PdfEngine<T> {
       return false;
     }
 
-    // Handle page rotation for proper image orientation
-    const rotation = page.rotation & 3;
-    
-    // For debugging - log the page rotation
-    console.log('Page rotation:', rotation, 'degrees:', rotation * 90);
-    
-    // Create matrix based on page rotation
     const matrixPtr = this.memoryManager.malloc(6 * 4);
-    
-    if (rotation === 3) {
-      // For CAD PDF: rotation + scaling matrix
-      // 90° clockwise rotation matrix combined with scaling
-      this.pdfiumModule.pdfium.setValue(matrixPtr, 0, 'float');                    // a: cos(90°)
-      this.pdfiumModule.pdfium.setValue(matrixPtr + 4, imageData.height, 'float'); // b: sin(90°) * height
-      this.pdfiumModule.pdfium.setValue(matrixPtr + 8, -imageData.width, 'float'); // c: -sin(90°) * width  
-      this.pdfiumModule.pdfium.setValue(matrixPtr + 12, 0, 'float');               // d: cos(90°)
-      this.pdfiumModule.pdfium.setValue(matrixPtr + 16, 0, 'float');               // e
-      this.pdfiumModule.pdfium.setValue(matrixPtr + 20, 0, 'float');               // f
-      
-      console.log(`[MATRIX DEBUG] CAD PDF rotation matrix: 0, ${imageData.height}, ${-imageData.width}, 0`);
-    } else {
-      // Normal PDF: simple scaling matrix
-      this.pdfiumModule.pdfium.setValue(matrixPtr, imageData.width, 'float');  // a
-      this.pdfiumModule.pdfium.setValue(matrixPtr + 4, 0, 'float');            // b
-      this.pdfiumModule.pdfium.setValue(matrixPtr + 8, 0, 'float');            // c  
-      this.pdfiumModule.pdfium.setValue(matrixPtr + 12, imageData.height, 'float'); // d
-      this.pdfiumModule.pdfium.setValue(matrixPtr + 16, 0, 'float');           // e
-      this.pdfiumModule.pdfium.setValue(matrixPtr + 20, 0, 'float');           // f
-      
-      console.log(`[MATRIX DEBUG] Normal PDF scaling matrix: ${imageData.width}x${imageData.height}`);
-    }
-    
+    this.pdfiumModule.pdfium.setValue(matrixPtr, imageData.width, 'float');
+    this.pdfiumModule.pdfium.setValue(matrixPtr + 4, 0, 'float');
+    this.pdfiumModule.pdfium.setValue(matrixPtr + 8, 0, 'float');
+    this.pdfiumModule.pdfium.setValue(matrixPtr + 12, imageData.height, 'float');
+    this.pdfiumModule.pdfium.setValue(matrixPtr + 16, 0, 'float');
+    this.pdfiumModule.pdfium.setValue(matrixPtr + 20, 0, 'float');
     if (!this.pdfiumModule.FPDFPageObj_SetMatrix(imageObjectPtr, matrixPtr)) {
       this.memoryManager.free(matrixPtr);
       this.pdfiumModule.FPDFBitmap_Destroy(bitmapPtr);
@@ -3269,16 +3253,11 @@ export class PdfiumEngine<T = Blob> implements PdfEngine<T> {
     }
     this.memoryManager.free(matrixPtr);
 
-    // Standard positioning for all cases
     const pagePos = this.convertDevicePointToPagePoint(page, {
       x: rect.origin.x,
-      y: rect.origin.y + rect.size.height,
+      y: rect.origin.y + imageData.height, // Use updated height after rotation
     });
-    
-    // Apply translation
     this.pdfiumModule.FPDFPageObj_Transform(imageObjectPtr, 1, 0, 0, 1, pagePos.x, pagePos.y);
-    
-    console.log(`[POSITIONING] Final: pageX=${pagePos.x}, pageY=${pagePos.y}, rotation=${rotation}`);
 
     if (!this.pdfiumModule.FPDFAnnot_AppendObject(annotationPtr, imageObjectPtr)) {
       this.pdfiumModule.FPDFBitmap_Destroy(bitmapPtr);
@@ -3292,6 +3271,77 @@ export class PdfiumEngine<T = Blob> implements PdfEngine<T> {
 
     return true;
   }
+
+/**
+ * Rotate ImageData to compensate for page rotation.
+ * @param imageData Original ImageData
+ * @param rotation Page rotation value (0-3)
+ * @returns Rotated ImageData
+ * @private
+ */
+rotateImageData(imageData: ImageData, rotation: number): ImageData {
+  const width = imageData.width;
+  const height = imageData.height;
+  let newWidth = width;
+  let newHeight = height;
+  const data = imageData.data;
+  const newData = new Uint8ClampedArray(data.length);
+
+  // Determine rotation angle: rotation * 90 degrees clockwise
+  let angle = (rotation * 90) % 360; // 0,90,180,270 clockwise - no invert to try opposite direction
+
+  switch (angle) {
+    case 90: // 90° clockwise (previously was ccw, but now direct)
+      newWidth = height;
+      newHeight = width;
+      for (let y = 0; y < height; y++) {
+        for (let x = 0; x < width; x++) {
+          const srcIdx = (y * width + x) * 4;
+          const dstIdx = (x * height + (height - 1 - y)) * 4;
+          newData[dstIdx] = data[srcIdx];
+          newData[dstIdx + 1] = data[srcIdx + 1];
+          newData[dstIdx + 2] = data[srcIdx + 2];
+          newData[dstIdx + 3] = data[srcIdx + 3];
+        }
+      }
+      break;
+    case 180: // 180°
+      for (let y = 0; y < height; y++) {
+        for (let x = 0; x < width; x++) {
+          const srcIdx = (y * width + x) * 4;
+          const dstIdx = ((height - 1 - y) * width + (width - 1 - x)) * 4;
+          newData[dstIdx] = data[srcIdx];
+          newData[dstIdx + 1] = data[srcIdx + 1];
+          newData[dstIdx + 2] = data[srcIdx + 2];
+          newData[dstIdx + 3] = data[srcIdx + 3];
+        }
+      }
+      break;
+    case 270: // 270° clockwise = 90° counterclockwise
+      newWidth = height;
+      newHeight = width;
+      for (let y = 0; y < height; y++) {
+        for (let x = 0; x < width; x++) {
+          const srcIdx = (y * width + x) * 4;
+          const dstIdx = (x * height + (height - 1 - y)) * 4;
+          newData[dstIdx] = data[srcIdx];
+          newData[dstIdx + 1] = data[srcIdx + 1];
+          newData[dstIdx + 2] = data[srcIdx + 2];
+          newData[dstIdx + 3] = data[srcIdx + 3];
+        }
+      }
+      break;
+    default: // 0°
+      return imageData; // No change
+  }
+
+  return {
+    data: newData,
+    width: newWidth,
+    height: newHeight,
+    colorSpace: imageData.colorSpace,
+  };
+}
 
   /**
    * Save document to array buffer
@@ -7499,23 +7549,31 @@ export class PdfiumEngine<T = Blob> implements PdfEngine<T> {
     const DH = page.size.height;
     const r = page.rotation & 3;
 
+    console.log(`[CONVERT] Input: x=${position.x}, y=${position.y}, pageSize=${DW}x${DH}, rotation=${r}`);
+
     if (r === 0) {
-      // 0°
-      return { x: position.x, y: DH - position.y };
+      // 0°: Normal orientation
+      const result = { x: position.x, y: DH - position.y };
+      console.log(`[CONVERT] r=0 result: x=${result.x}, y=${result.y}`);
+      return result;
     }
     if (r === 1) {
-      // 90° CW
-      // x_d = sx*y, y_d = sy*x  =>  x = y_d/sy, y = x_d/sx
-      return { x: position.y, y: position.x };
+      // 90° CW: Page is rotated 90 degrees clockwise
+      const result = { x: position.y, y: position.x };
+      console.log(`[CONVERT] r=1 result: x=${result.x}, y=${result.y}`);
+      return result;
     }
     if (r === 2) {
-      // 180°
-      return { x: DW - position.x, y: position.y };
+      // 180°: Page is upside down
+      const result = { x: DW - position.x, y: position.y };
+      console.log(`[CONVERT] r=2 result: x=${result.x}, y=${result.y}`);
+      return result;
     }
     {
-      // 270° CW
-      // x_d = DW - sx*y, y_d = DH - sy*x
-      return { x: DH - position.y, y: DW - position.x };
+      // 270° CW: Page is rotated 270 degrees clockwise (or 90 degrees counter-clockwise)  
+      const result = { x: DH - position.y, y: DW - position.x };
+      console.log(`[CONVERT] r=3 result: x=${result.x}, y=${result.y}`);
+      return result;
     }
   }
 
