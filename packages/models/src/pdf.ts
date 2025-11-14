@@ -1,5 +1,6 @@
 import { Size, Rect, Position, Rotation } from './geometry';
 import { Task, TaskError } from './task';
+import { PdfCharset } from './charset';
 
 /**
  * Representation of pdf page
@@ -2962,6 +2963,19 @@ export interface PdfEngine<T = Blob> {
    * @returns task that all documents are closed or not
    */
   closeAllDocuments: () => PdfTask<boolean>;
+  /**
+   * Configure fallback font for specific character set
+   * @param charset - Character set identifier (e.g., PdfCharset.VIETNAMESE_CHARSET)
+   * @param fontPath - Path to the font file to use as fallback
+   * @returns task indicating whether font configuration was successful
+   */
+  configureFallbackFont?: (charset: PdfCharset, fontPath: string) => PdfTask<boolean>;
+  /**
+   * Preload a font file for better performance
+   * @param fontPath - Path to the font file to preload
+   * @returns task indicating whether font preloading was successful
+   */
+  preloadFont?: (fontPath: string) => PdfTask<boolean>;
 }
 
 /**

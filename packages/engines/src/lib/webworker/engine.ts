@@ -39,6 +39,7 @@ import {
   PdfPrintOptions,
   PdfBookmarkObject,
   PdfAddAttachmentParams,
+  PdfCharset,
 } from '@embedpdf/models';
 import { ExecuteRequest, Response, SpecificExecuteRequest } from './runner';
 
@@ -953,6 +954,37 @@ export class WebWorkerEngine implements PdfEngine {
     const requestId = this.generateRequestId('closeAllDocuments');
     const task = new WorkerTask<boolean>(this.worker, requestId);
     const request: ExecuteRequest = createRequest(requestId, 'closeAllDocuments', []);
+    this.proxy(task, request);
+
+    return task;
+  }
+
+  /**
+   * Configure fallback font for Vietnamese text rendering
+   * @param charset - Character set to configure font for
+   * @param fontPath - Path to font file
+   * @public
+   */
+  configureFallbackFont(charset: PdfCharset, fontPath: string) {
+    this.logger.debug(LOG_SOURCE, LOG_CATEGORY, 'configureFallbackFont', charset, fontPath);
+    const requestId = this.generateRequestId('configureFallbackFont');
+    const task = new WorkerTask<boolean>(this.worker, requestId);
+    const request: ExecuteRequest = createRequest(requestId, 'configureFallbackFont', [charset, fontPath]);
+    this.proxy(task, request);
+
+    return task;
+  }
+
+  /**
+   * Preload font file for Vietnamese text rendering
+   * @param fontPath - Path to font file to preload
+   * @public
+   */
+  preloadFont(fontPath: string) {
+    this.logger.debug(LOG_SOURCE, LOG_CATEGORY, 'preloadFont', fontPath);
+    const requestId = this.generateRequestId('preloadFont');
+    const task = new WorkerTask<boolean>(this.worker, requestId);
+    const request: ExecuteRequest = createRequest(requestId, 'preloadFont', [fontPath]);
     this.proxy(task, request);
 
     return task;

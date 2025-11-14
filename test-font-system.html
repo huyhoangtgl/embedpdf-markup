@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Vietnamese Font System Test</title>
+</head>
+<body>
+    <h1>Vietnamese Font System Test</h1>
+    <div id="output"></div>
+    
+    <script type="module">
+        import { PdfCharset } from '../packages/models/dist/index.js';
+        
+        console.log('🧪 Testing Vietnamese Font System...');
+        console.log('📋 Available PdfCharset values:', PdfCharset);
+        console.log('🇻🇳 Vietnamese charset:', PdfCharset.VIETNAMESE_CHARSET);
+        
+        // Test if PdfCharset is properly exported
+        if (PdfCharset.VIETNAMESE_CHARSET === 163) {
+            console.log('✅ PdfCharset.VIETNAMESE_CHARSET correctly defined as 163');
+            document.getElementById('output').innerHTML = `
+                <h2 style="color: green;">✅ Success!</h2>
+                <p>PdfCharset is properly exported from @embedpdf/models</p>
+                <p>VIETNAMESE_CHARSET = ${PdfCharset.VIETNAMESE_CHARSET}</p>
+                <p>Ready for font configuration testing!</p>
+            `;
+        } else {
+            console.error('❌ PdfCharset.VIETNAMESE_CHARSET has wrong value');
+            document.getElementById('output').innerHTML = `
+                <h2 style="color: red;">❌ Error!</h2>
+                <p>PdfCharset.VIETNAMESE_CHARSET = ${PdfCharset.VIETNAMESE_CHARSET}</p>
+                <p>Expected: 163</p>
+            `;
+        }
+    </script>
+</body>
+</html>

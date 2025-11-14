@@ -435,6 +435,12 @@ export class EngineRunner {
       case 'preparePrintDocument':
         task = this.engine[name]!(...args);
         break;
+      case 'configureFallbackFont':
+        task = this.engine[name]!(...args);
+        break;
+      case 'preloadFont':
+        task = this.engine[name]!(...args);
+        break;
     }
 
     this.tasks.set(request.id, task);

@@ -1,4 +1,5 @@
 import { h, Fragment } from 'preact';
+import { useEffect } from 'preact/hooks';
 import styles from '../styles/index.css';
 import { EmbedPDF } from '@embedpdf/core/preact';
 import { createPluginRegistration } from '@embedpdf/core';
@@ -13,6 +14,7 @@ import {
   PerfLogger,
   Rotation,
   uuidV4,
+  PdfCharset,
 } from '@embedpdf/models';
 import {
   Viewport,
@@ -2798,6 +2800,67 @@ export function PDFViewer({ config }: PDFViewerProps) {
     worker: config.worker,
     logger: config.log ? logger : undefined,
   });
+
+  // Configure Vietnamese font support when engine is ready
+  useEffect(() => {
+    if (!engine || isLoading) return;
+
+    const configureVietnameseFonts = async () => {
+      try {
+        console.log('🔧 [App] Starting Vietnamese font configuration...');
+        
+        // Check if engine supports font configuration
+        if ('configureFallbackFont' in engine && 'preloadFont' in engine) {
+          console.log('✅ [App] Engine supports font configuration methods');
+          
+          // Configure Vietnamese charset fallback
+          console.log('🇻🇳 [App] Configuring Vietnamese charset...');
+          engine.configureFallbackFont(
+            PdfCharset.VIETNAMESE_CHARSET,
+            '/fonts/NotoSans-Regular.ttf',
+            'Noto Sans Vietnamese'
+          );
+
+          // Configure default charset fallback
+          console.log('🌐 [App] Configuring default charset...');
+          engine.configureFallbackFont(
+            PdfCharset.DEFAULT_CHARSET,
+            '/fonts/NotoSans-Regular.ttf',
+            'Noto Sans'
+          );
+
+          // Preload fonts for better performance (optional)
+          try {
+            console.log('📥 [App] Attempting to preload font...');
+            const loaded = await engine.preloadFont('/fonts/NotoSans-Regular.ttf');
+            if (loaded) {
+              console.log('✅ [App] Successfully preloaded Vietnamese font');
+            } else {
+              console.warn('⚠️ [App] Failed to preload Vietnamese font - will load on demand');
+            }
+          } catch (error) {
+            console.warn('⚠️ [App] Font preloading failed, but fallback will still work:', error);
+          }
+
+          // Log final status if fontSystem is accessible
+          if ('fontSystem' in engine && engine.fontSystem && 'logStatus' in engine.fontSystem) {
+            console.log('📊 [App] Logging font system status...');
+            engine.fontSystem.logStatus();
+          }
+
+          console.log('🎉 [App] Vietnamese text support configured successfully');
+        } else {
+          console.warn('❌ [App] Font fallback configuration not available on this engine');
+          console.log('🔍 [App] Available engine methods:', Object.getOwnPropertyNames(engine));
+        }
+      } catch (error) {
+        console.error('❌ [App] Failed to configure Vietnamese fonts:', error);
+      }
+    };
+
+    console.log('🚀 [App] Engine ready, configuring fonts...');
+    configureVietnameseFonts();
+  }, [engine, isLoading]);
 
   // **Merge user configurations with defaults**
   const pluginConfigs = mergePluginConfigs(config.plugins);

@@ -78,6 +78,7 @@ import {
   PdfAnnotationStateModel,
   quadToRect,
   ImageConversionTypes,
+  PdfCharset,
   PageTextSlice,
   stripPdfUnwantedMarkers,
   rectToQuad,
@@ -128,6 +129,7 @@ import { DocumentContext, PageContext, PdfCache } from './cache';
 import { ImageDataConverter, LazyImageData } from '../converters/types';
 import { MemoryManager } from './core/memory-manager';
 import { WasmPointer } from './types/branded';
+import { VietnameseFontSystem } from './font-system';
 
 /**
  * Format of bitmap
@@ -256,6 +258,11 @@ export class PdfiumEngine<T = Blob> implements PdfEngine<T> {
   private readonly imageDataConverter: ImageDataConverter<T>;
 
   /**
+   * Vietnamese font system for fallback font support
+   */
+  private fontSystem: VietnameseFontSystem;
+
+  /**
    * Create an instance of PdfiumEngine
    * @param wasmModule - pdfium wasm module
    * @param logger - logger instance
@@ -274,6 +281,7 @@ export class PdfiumEngine<T = Blob> implements PdfEngine<T> {
     this.logger = logger;
     this.imageDataConverter = imageDataConverter;
     this.memoryManager = new MemoryManager(this.pdfiumModule, this.logger);
+    this.fontSystem = new VietnameseFontSystem(this.pdfiumModule, this.logger);
 
     if (this.logger.isEnabled('debug')) {
       this.memoryLeakCheckInterval = setInterval(() => {
@@ -289,8 +297,23 @@ export class PdfiumEngine<T = Blob> implements PdfEngine<T> {
   initialize() {
     this.logger.debug(LOG_SOURCE, LOG_CATEGORY, 'initialize');
     this.logger.perf(LOG_SOURCE, LOG_CATEGORY, `Initialize`, 'Begin', 'General');
+    
+    console.log('🚀 [PDFium Engine] Starting initialization...');
     this.pdfiumModule.PDFiumExt_Init();
+    console.log('✅ [PDFium Engine] PDFiumExt_Init completed');
+    
+    // Initialize Vietnamese font system for fallback font support
+    console.log('🔧 [Font System] Initializing Vietnamese font system...');
+    const fontInitialized = this.fontSystem.initialize();
+    if (fontInitialized) {
+      console.log('✅ [Font System] Font system initialized successfully');
+    } else {
+      console.error('❌ [Font System] Failed to initialize font system');
+      this.logger.warn(LOG_SOURCE, LOG_CATEGORY, 'Failed to initialize font system, Vietnamese text may not display correctly in downloaded PDFs');
+    }
+    
     this.logger.perf(LOG_SOURCE, LOG_CATEGORY, `Initialize`, 'End', 'General');
+    console.log('🎉 [PDFium Engine] Initialization complete');
     return PdfTaskHelper.resolve(true);
   }
 
@@ -302,6 +325,10 @@ export class PdfiumEngine<T = Blob> implements PdfEngine<T> {
   destroy() {
     this.logger.debug(LOG_SOURCE, LOG_CATEGORY, 'destroy');
     this.logger.perf(LOG_SOURCE, LOG_CATEGORY, `Destroy`, 'Begin', 'General');
+    
+    // Cleanup font system before destroying library
+    this.fontSystem.destroy();
+    
     this.pdfiumModule.FPDF_DestroyLibrary();
     if (this.memoryLeakCheckInterval) {
       clearInterval(this.memoryLeakCheckInterval);
@@ -4023,6 +4050,70 @@ rotateImageData(imageData: ImageData, rotation: number): ImageData {
     this.logger.perf(LOG_SOURCE, LOG_CATEGORY, 'getPageGlyphs', 'End', doc.id);
 
     return PdfTaskHelper.resolve(glyphs);
+  }
+
+  /**
+   * Configure fallback font for Vietnamese and other character sets
+   * 
+   * @param charset - Character set identifier (e.g., PdfCharset.VIETNAMESE_CHARSET)
+   * @param fontPath - Path to the font file (e.g., '/fonts/NotoSans-Regular.ttf')
+   * @returns Task that resolves to true if font configuration was successful
+   * @public
+   */
+  public configureFallbackFont(charset: PdfCharset, fontPath: string): PdfTask<boolean> {
+    console.log(`🔧 [Font Config] Configuring fallback font: charset=${charset}, path=${fontPath}`);
+    const task = PdfTaskHelper.create<boolean>();
+    
+    try {
+      // Use fontPath as both URL and name for simplicity
+      const fontName = fontPath.split('/').pop() || fontPath;
+      this.fontSystem.addFontMapping(charset, fontPath, fontName);
+      console.log(`✅ [Font Config] Successfully configured fallback font for charset ${charset}`);
+      this.logger.debug(LOG_SOURCE, LOG_CATEGORY, `Configured fallback font: ${fontName} for charset ${charset}`);
+      task.resolve(true);
+    } catch (error) {
+      console.error(`❌ [Font Config] Failed to configure fallback font:`, error);
+      task.reject({
+        code: PdfErrorCode.Unknown,
+        message: `Failed to configure fallback font: ${error}`,
+      });
+    }
+    
+    return task;
+  }
+
+  /**
+   * Preload a font to improve performance when creating FreeText annotations
+   * 
+   * @param fontPath - Path to the font file to preload
+   * @returns Task that resolves to true if font was loaded successfully
+   * @public
+   */
+  public preloadFont(fontPath: string): PdfTask<boolean> {
+    console.log(`📥 [Font Preload] Starting preload for: ${fontPath}`);
+    const task = PdfTaskHelper.create<boolean>();
+    
+    this.fontSystem.preloadFont(fontPath)
+      .then((result) => {
+        if (result) {
+          console.log(`✅ [Font Preload] Successfully preloaded font: ${fontPath}`);
+          this.logger.debug(LOG_SOURCE, LOG_CATEGORY, `Successfully preloaded font: ${fontPath}`);
+          task.resolve(true);
+        } else {
+          console.warn(`⚠️ [Font Preload] Failed to preload font: ${fontPath}`);
+          this.logger.warn(LOG_SOURCE, LOG_CATEGORY, `Failed to preload font: ${fontPath}`);
+          task.resolve(false);
+        }
+      })
+      .catch((error) => {
+        console.error(`❌ [Font Preload] Error preloading font ${fontPath}:`, error);
+        task.reject({
+          code: PdfErrorCode.Unknown,
+          message: `Failed to preload font: ${error}`,
+        });
+      });
+    
+    return task;
   }
 
   private readCharBox(
